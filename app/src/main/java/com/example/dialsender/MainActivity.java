@@ -46,12 +46,13 @@ public class MainActivity extends Activity {
     static final int CHUNK = 965;
     static final int DIAL_ID = 12530;
 
-    EditText etLe, etClassic;
+    EditText etLe;
     TextView tvLog;
     ScrollView scroll;
     Button btn;
 
     volatile BluetoothGatt gatt;
+    volatile boolean connected;
     volatile CountDownLatch connLatch, svcLatch, descLatch;
     final LinkedBlockingQueue<String> notes = new LinkedBlockingQueue<>();
     final LinkedBlockingQueue<byte[]> frames = new LinkedBlockingQueue<>();
@@ -74,20 +75,12 @@ public class MainActivity extends Activity {
         root.addView(info);
 
         TextView l1 = new TextView(this);
-        l1.setText("Alamat BLE jam:");
+        l1.setText("Alamat Bluetooth jam:");
         root.addView(l1);
         etLe = new EditText(this);
         etLe.setSingleLine(true);
-        etLe.setText("08:75:0F:17:85:00");
+        etLe.setText("B4:08:75:0F:17:85");
         root.addView(etLe);
-
-        TextView l2 = new TextView(this);
-        l2.setText("Alamat Bluetooth klasik jam:");
-        root.addView(l2);
-        etClassic = new EditText(this);
-        etClassic.setSingleLine(true);
-        etClassic.setText("B4:08:75:0F:17:85");
-        root.addView(etClassic);
 
         btn = new Button(this);
         btn.setText("Kirim watchface ke jam");
@@ -141,10 +134,9 @@ public class MainActivity extends Activity {
             return;
         }
         final String le = etLe.getText().toString().trim().toUpperCase();
-        final String classic = etClassic.getText().toString().trim().toUpperCase();
-        if (!BluetoothAdapter.checkBluetoothAddress(le)
-                || !BluetoothAdapter.checkBluetoothAddress(classic)) {
-            log("Format alamat salah. Contoh: 08:75:0F:17:85:00");
+        final String classic = le;
+        if (!BluetoothAdapter.checkBluetoothAddress(le)) {
+            log("Format alamat salah. Contoh: B4:08:75:0F:17:85");
             return;
         }
         setBusy(true);
@@ -170,11 +162,15 @@ public class MainActivity extends Activity {
         @Override
         public void onConnectionStateChange(BluetoothGatt g, int status, int newState) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                connected = true;
                 log("BLE tersambung.");
                 CountDownLatch l = connLatch;
                 if (l != null) l.countDown();
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                connected = false;
                 log("BLE terputus (kode " + status + ").");
+                CountDownLatch l2 = connLatch;
+                if (l2 != null) l2.countDown();
             }
         }
 
@@ -350,11 +346,25 @@ public class MainActivity extends Activity {
 
         // 2. Sambung BLE
         BluetoothDevice le = ad.getRemoteDevice(leAddr);
-        connLatch = new CountDownLatch(1);
-        gatt = le.connectGatt(this, false, cb, BluetoothDevice.TRANSPORT_LE);
-        if (!connLatch.await(25, TimeUnit.SECONDS)) {
-            log("Gagal tersambung BLE. Pastikan OnWear Pro sudah ditutup (Paksa berhenti), "
-                    + "lalu coba lagi.");
+        for (int attempt = 1; attempt <= 4 && !connected; attempt++) {
+            log("Menyambung BLE (percobaan " + attempt + ")...");
+            connLatch = new CountDownLatch(1);
+            gatt = le.connectGatt(this, false, cb, BluetoothDevice.TRANSPORT_LE);
+            connLatch.await(15, TimeUnit.SECONDS);
+            if (!connected) {
+                try {
+                    gatt.disconnect();
+                    gatt.close();
+                } catch (Exception ignore) {
+                }
+                gatt = null;
+                Thread.sleep(1500);
+            }
+        }
+        if (!connected) {
+            log("Gagal tersambung BLE. Pastikan OnWear Pro sudah ditutup, jam dekat HP, "
+                    + "dan jam tidak sedang tersambung ke aplikasi lain. Matikan lalu "
+                    + "nyalakan Bluetooth HP, lalu coba lagi.");
             return;
         }
         Thread.sleep(800);
